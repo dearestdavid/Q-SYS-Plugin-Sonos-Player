@@ -1,0 +1,1111 @@
+--------------------------------------------------------------------------------
+-- Sonos Player  -  one plugin instance per Sonos player
+-- David - Threshold Audio  (threshold.audio)
+--
+-- Talks UPnP/SOAP directly to the player (port 1400), no cloud.
+-- Property "Player" is a room name (e.g. "Kitchen") or an IP address.
+-- Transport commands are always sent to the coordinator of the player's group,
+-- volume/mute to the player itself, so the instance behaves correctly when the
+-- player is a member of a group.
+--------------------------------------------------------------------------------
+
+PluginInfo = {
+	Name = "Threshold Audio~Sonos Player",
+	Version = "4.0",
+	Id = "076e44d3-69ba-4ece-8156-64387db20b87",
+	Description = "One Sonos player per plugin instance (UPnP/SOAP, no cloud). Transport, volume, shuffle/repeat, seek, grouping, favorites, Play URI, Snapshot/Restore, command pin. By David - Threshold Audio.",
+	ShowDebug = true,
+	Author = "David - Threshold Audio"
+}
+
+function GetPrettyName(props)
+	local p = props["Player"].Value
+	if p ~= nil and p ~= "" then return "Sonos: "..p end
+	return "Sonos Player"
+end
+
+function GetColor(props)
+	return {25, 25, 25}
+end
+
+function GetProperties()
+    local props = {}
+    table.insert(props, { Name = "Player",    Type = "string", Value = "" })
+    table.insert(props, { Name = "Artwork",   Type = "enum",   Choices = {"On", "Off"},       Value = "On" })
+    table.insert(props, { Name = "Poll Rate", Type = "enum",   Choices = {"1 s", "2 s", "5 s"}, Value = "2 s" })
+	return props
+end
+
+Colors = {
+    Accent = {11, 167, 195},
+    Idle   = {96, 96, 96},
+    MuteOn = {200, 40, 40},
+    Green  = {30, 140, 60},
+    Red    = {200, 40, 40},
+    Page   = {24, 24, 24},
+    Field  = {54, 54, 54},
+    Button = {64, 64, 64},
+    White  = {255, 255, 255},
+    Text   = {235, 235, 235},
+    Dim    = {150, 150, 150},
+}
+
+-- pg = page, st = layout style override (defaults to ct), tbs = TextBoxStyle, hide = pins only
+ControlsTable = {
+  ---------------------------------------------------------------- page 1 : Player
+  Online       = {pg=1, ct="Indicator", it="Led", st="Led", up=true, ps="Output", nc=Colors.Green, oc=Colors.Idle, px=12, py=12, sx=12, sy=12},
+  Art          = {pg=1, ct="Button", bt="Trigger", up=false, nc=Colors.Page, oc=Colors.Page, px=58, py=12, sx=200, sy=200, r=6, m=0},
+  Room         = {pg=1, ct="Indicator", it="Text", up=true, ps="Output", nc=Colors.Page, oc=Colors.Page, px=12, py=220, sx=200, sy=24, fs=13},
+  State        = {pg=1, ct="Indicator", it="Text", up=true, ps="Output", nc=Colors.Field, oc=Colors.Field, px=216, py=220, sx=88, sy=24, fs=8, r=3},
+  Track        = {pg=1, ct="Indicator", it="Text", up=true, ps="Output", nc=Colors.Page, oc=Colors.Page, px=12, py=248, sx=292, sy=22, fs=11},
+  Artist       = {pg=1, ct="Indicator", it="Text", up=true, ps="Output", nc=Colors.Page, oc=Colors.Page, px=12, py=272, sx=292, sy=18, fs=9},
+  Album        = {pg=1, ct="Indicator", it="Text", up=true, ps="Output", nc=Colors.Page, oc=Colors.Page, px=12, py=292, sx=292, sy=18, fs=9},
+  Elapsed      = {pg=1, ct="Indicator", it="Text", up=true, ps="Output", nc=Colors.Page, oc=Colors.Page, px=12, py=318, sx=40, sy=14, fs=8},
+  Time         = {pg=1, ct="Knob", cu="Percent", Min=0, Max=100, st="Fader", up=true, ps="Both", nc=Colors.Accent, oc=Colors.Accent, px=56, py=318, sx=204, sy=14, r=3, m=0},
+  Duration     = {pg=1, ct="Indicator", it="Text", up=true, ps="Output", nc=Colors.Page, oc=Colors.Page, px=264, py=318, sx=40, sy=14, fs=8},
+  Previous     = {pg=1, ct="Button", bt="Trigger", up=true, ps="Both", nc=Colors.Accent, oc=Colors.Idle, px=78, py=342, sx=40, sy=40, r=40, m=5, p=3, ict="Icon", ic="Previous"},
+  Play         = {pg=1, ct="Button", bt="Toggle",  up=true, ps="Both", nc=Colors.Accent, oc=Colors.Idle, px=138, py=342, sx=40, sy=40, r=8, m=5, p=3, ict="Icon", ic="Play Pause"},
+  Next         = {pg=1, ct="Button", bt="Trigger", up=true, ps="Both", nc=Colors.Accent, oc=Colors.Idle, px=198, py=342, sx=40, sy=40, r=40, m=5, p=3, ict="Icon", ic="Next"},
+  Shuffle      = {pg=1, ct="Button", bt="Toggle",  up=true, ps="Both", nc=Colors.Accent, oc=Colors.Idle, px=86, py=390, sx=32, sy=32, r=32, m=4, p=3, ict="Icon", ic="Shuffle"},
+  Repeat       = {pg=1, ct="Button", bt="Toggle",  up=true, ps="Both", nc=Colors.Accent, oc=Colors.Idle, px=142, py=390, sx=32, sy=32, r=32, m=4, p=3, ict="Icon", ic="Loop"},
+  Repeat_Mode  = {pg=1, ct="Indicator", it="Text", up=true, ps="Output", nc=Colors.Page, oc=Colors.Page, px=180, py=390, sx=44, sy=32, fs=9},
+  Volume       = {pg=1, ct="Knob", cu="Integer", Min=0, Max=100, st="Fader", up=true, ps="Both", nc=Colors.White, oc=Colors.White, px=64, py=432, sx=200, sy=24, r=5, m=3, fs=10},
+  Mute         = {pg=1, ct="Button", bt="Toggle",  up=true, ps="Both", nc=Colors.MuteOn, oc=Colors.Idle, px=272, py=430, sx=28, sy=28, r=5, m=3, p=2, ict="Icon", ic="Volume"},
+  Group_Volume = {pg=1, ct="Knob", cu="Integer", Min=0, Max=100, st="Fader", up=true, ps="Both", nc=Colors.White, oc=Colors.White, px=64, py=464, sx=200, sy=24, r=5, m=3, fs=10},
+  Group_Mute   = {pg=1, ct="Button", bt="Toggle",  up=true, ps="Both", nc=Colors.MuteOn, oc=Colors.Idle, px=272, py=462, sx=28, sy=28, r=5, m=3, p=2, ict="Icon", ic="Volume"},
+  Group_With   = {pg=1, ct="Text", tbs="ComboBox", st="ComboBox", up=true, ps="Both", nc=Colors.Field, oc=Colors.Field, px=92, py=500, sx=212, sy=24, r=3, m=2, fs=10},
+  Favorite     = {pg=1, ct="Text", tbs="ComboBox", st="ComboBox", up=true, ps="Both", nc=Colors.Field, oc=Colors.Field, px=92, py=530, sx=212, sy=24, r=3, m=2, fs=10},
+  Coordinator  = {pg=1, ct="Indicator", it="Text", up=true, ps="Output", nc=Colors.Page, oc=Colors.Page, px=12, py=560, sx=292, sy=16, fs=8},
+  ---------------------------------------------------------------- page 2 : Setup
+  IP             = {pg=2, ct="Indicator", it="Text", up=true, ps="Output", nc=Colors.Field, oc=Colors.Field, px=96, py=40, sx=208, sy=24, r=3, m=2, fs=10},
+  Status         = {pg=2, ct="Indicator", it="Status", up=true, ps="Output", nc=Colors.Field, oc=Colors.Field, px=96, py=70, sx=208, sy=24, r=3, m=2, fs=10},
+  Discover_IP    = {pg=2, ct="Text", bt="Text Box", up=false, nc=Colors.Field, oc=Colors.Field, px=96, py=100, sx=208, sy=24, r=3, m=2, fs=10},
+  Discover       = {pg=2, ct="Button", bt="Trigger", l="Discover", up=true, ps="Input", nc=Colors.Green, oc=Colors.Button, px=12, py=130, sx=292, sy=28, r=4, m=3, fs=11},
+  Command        = {pg=2, ct="Text", bt="Text Box", up=true, ps="Both", nc=Colors.Field, oc=Colors.Field, px=96, py=198, sx=208, sy=24, r=3, m=2, fs=10},
+  Command_Result = {pg=2, ct="Indicator", it="Text", up=true, ps="Output", nc=Colors.Field, oc=Colors.Field, px=96, py=228, sx=208, sy=24, r=3, m=2, fs=10},
+  Play_URI       = {pg=2, ct="Text", bt="Text Box", up=true, ps="Both", nc=Colors.Field, oc=Colors.Field, px=96, py=258, sx=208, sy=24, r=3, m=2, fs=10},
+  Max_Volume     = {pg=2, ct="Knob", cu="Integer", Min=0, Max=100, st="Text Field", up=true, ps="Both", nc=Colors.Field, oc=Colors.Field, px=96, py=288, sx=60, sy=24, r=3, m=2, fs=10},
+  Snapshot       = {pg=2, ct="Button", bt="Trigger", l="Snapshot", up=true, ps="Both", nc=Colors.Green, oc=Colors.Button, px=12, py=322, sx=142, sy=28, r=4, m=3, fs=11},
+  Restore        = {pg=2, ct="Button", bt="Trigger", l="Restore", up=true, ps="Both", nc=Colors.Green, oc=Colors.Button, px=162, py=322, sx=142, sy=28, r=4, m=3, fs=11},
+  ---------------------------------------------------------------- pins only
+  Standalone     = {hide=true, ct="Button", bt="Trigger", up=true, ps="Input"},
+}
+
+function GetControls(props)
+    local ctl = {}
+    for k,c in pairs(ControlsTable) do
+        table.insert(ctl, {
+            Name = k,
+            ControlType = c.ct,
+            ButtonType = c.bt,
+            IndicatorType = c.it,
+            ControlUnit = c.cu,
+            Min = c.Min,
+            Max = c.Max,
+            TextBoxStyle = c.tbs,
+            Count = 1,
+            UserPin = c.up,
+            PinStyle = c.ps,
+            IconType = c.ict,
+            Icon = c.ic,
+        })
+    end
+	return ctl
+end
+
+function GetPages()
+  return {
+    { name = "Player" },
+    { name = "Setup" }
+  }
+end
+
+function GetControlLayout(props)
+    local layout, graphics = {}, {}
+    local page = props['page_index'].Value
+    local W = 316
+    local H = (page == 1) and 588 or 472
+
+    table.insert(graphics, {Type = "GroupBox", StrokeWidth = 0, CornerRadius = 0, Fill = Colors.Page, Position = {0, 0}, Size = {W, H}})
+
+    for k,c in pairs(ControlsTable) do
+      if not c.hide and c.pg == page then
+        layout[k] = {
+          Style = c.st or c.ct,
+          ButtonStyle = c.bt,
+          Legend = c.l or "",
+          Position = {c.px, c.py},
+          Size = {c.sx, c.sy},
+          Color = c.nc,
+          OffColor = c.oc,
+          UnlinkOffColor = true,
+          TextFontSize = c.fs or 10,
+          Radius = c.r or 0,
+          Margin = c.m or 0,
+          Padding = c.p,
+          StrokeWidth = 0,
+          ButtonVisualStyle = "Flat",
+        }
+      end
+    end
+
+    local function AddText(text, x, y, w, h, ts, halign, valign, color)
+      table.insert(graphics, {Type = "Label", Text = text, Color = color or Colors.Text,
+                              HTextAlign = halign or "Left", VTextAlign = valign or "Center",
+                              TextSize = ts or 10, Position = {x, y}, Size = {w, h}})
+    end
+    local function AddHeader(text, x, y, w)
+      AddText(string.upper(text), x, y, w, 22, 9, "Left", "Center", Colors.Dim)
+    end
+
+    if page == 1 then
+      AddText("Volume",     12, 432, 48, 24, 9, "Left", nil, Colors.Dim)
+      AddText("Group",      12, 464, 48, 24, 9, "Left", nil, Colors.Dim)
+      AddText("Group with", 12, 500, 76, 24, 9, "Left", nil, Colors.Dim)
+      AddText("Favorite",   12, 530, 76, 24, 9, "Left", nil, Colors.Dim)
+    else
+      AddHeader("Player", 12, 12, 292)
+      AddText("Player",           12, 40,  80, 24, 9, "Left", nil, Colors.Dim)
+      AddText("Status",           12, 70,  80, 24, 9, "Left", nil, Colors.Dim)
+      AddText("Discover from IP", 12, 100, 84, 24, 9, "Left", nil, Colors.Dim)
+      AddHeader("Automation", 12, 170, 292)
+      AddText("Command",    12, 198, 80, 24, 9, "Left", nil, Colors.Dim)
+      AddText("Result",     12, 228, 80, 24, 9, "Left", nil, Colors.Dim)
+      AddText("Play URI",   12, 258, 80, 24, 9, "Left", nil, Colors.Dim)
+      AddText("Max volume", 12, 288, 80, 24, 9, "Left", nil, Colors.Dim)
+      AddText("Command pin:  play | pause | stop | next | prev | vol N | groupvol N | mute on/off/toggle | groupmute on/off/toggle\n"..
+              "shuffle on/off/toggle | repeat off/one/all/toggle | group ROOM | standalone | favorite NAME/N | uri URL\n"..
+              "snapshot | restore | discover",
+              12, 358, 292, 60, 7, "Left", "Top", Colors.Dim)
+      AddText("Player = room name or IP. Room names are found by scanning the subnet of the first network interface (or the subnet of 'Discover from IP').\n"..
+              "Sonos Player v"..PluginInfo.Version.."  -  David - Threshold Audio - threshold.audio",
+              12, 424, 292, 40, 7, "Left", "Top", Colors.Dim)
+    end
+
+	return layout, graphics
+end
+
+function GetPins(props)
+	return {}
+end
+
+function GetComponents(props)
+	return
+end
+
+function GetWiring(props)
+	return {}
+end
+
+--------------------------------------------------------------------------------
+-- Runtime
+--------------------------------------------------------------------------------
+if Controls then
+
+  rapidjson = require("rapidjson")
+
+  ---------------------------------------------------------------- configuration
+  PlayerProp = ""
+  if Properties ~= nil and Properties["Player"] ~= nil then PlayerProp = Properties["Player"].Value or "" end
+  PlayerProp = string.match(PlayerProp, "^%s*(.-)%s*$")
+  ShowArt = true
+  if Properties ~= nil and Properties["Artwork"] ~= nil then ShowArt = (Properties["Artwork"].Value ~= "Off") end
+  PollRate = 2
+  if Properties ~= nil and Properties["Poll Rate"] ~= nil then
+    PollRate = tonumber(string.match(Properties["Poll Rate"].Value or "2", "%d+")) or 2
+  end
+
+  DISCOVERY_WAIT = 6          -- seconds to wait for subnet scan replies
+  RESTORE_STEP = 0.6          -- seconds between chained SOAP calls
+  ART_MAX_BYTES = 300 * 1024  -- larger album art is skipped (it is embedded as base64 in the button legend)
+  STANDALONE = "- Standalone -"
+
+  Mute_Icons = {}
+  Mute_Icons[0] = "{\"IconString\":\"\xef\x88\x90\"}"
+  Mute_Icons[1] = "{\"IconString\":\"\xef\x88\x91\"}"
+  Bool2Num = {[true] = 1, [false] = 0}
+  Play_Modes = {Repeat = {"NORMAL","REPEAT_ONE","REPEAT_ALL"}, Shuffle_Repeat = {"SHUFFLE_NOREPEAT","SHUFFLE_REPEAT_ONE","SHUFFLE"}}
+  Play_Modes_FB = {NORMAL = {false,false,1}, REPEAT_ONE = {false,true,2}, REPEAT_ALL = {false,true,3}, SHUFFLE_NOREPEAT = {true,false,1}, SHUFFLE_REPEAT_ONE = {true,true,2}, SHUFFLE = {true,true,3}}
+  Repeat_Modes_Indicator = {"Off", "One", "All"}
+
+  ---------------------------------------------------------------- state
+  Me = {}              -- {IP, Name, uuid}  this player
+  Coord = {}           -- {IP, Name, uuid}  coordinator of my group (== Me when standalone / coordinator)
+  Topology = {}        -- list of {uuid, name, ip, coord}
+  GroupMembers = {}    -- topology entries in my group (incl. coordinator)
+  Vol = {}             -- [ip] = volume
+  MuteState = {}       -- [ip] = bool
+  Ready = false
+  SkipPolls = 0
+  TickCount = 0
+  PlayMode = nil
+  Pos, Dur = nil, nil
+  ArtURI, ArtData = nil, nil
+  EURIsAndMetaData = {}
+  Snapshot_Data = nil
+  SeekPending = nil
+  Found = {}           -- subnet scan: [name] = ip
+  TopoRequested = false
+  Warning = ""
+
+  Poll = Timer.New()
+
+  ---------------------------------------------------------------- small helpers
+  function IsIPv4(s)
+    return s ~= nil and string.match(s, "^%d+%.%d+%.%d+%.%d+$") ~= nil
+  end
+
+  function ClampVolume(v)
+    v = math.floor((tonumber(v) or 0) + 0.5)
+    if v < 0 then v = 0 end
+    if v > 100 then v = 100 end
+    local mx = math.floor(Controls.Max_Volume.Value + 0.5)
+    if mx > 0 and v > mx then v = mx end
+    return v
+  end
+
+  function SetResult(s)
+    Controls.Command_Result.String = s
+    print("[Sonos "..tostring(Me.Name or PlayerProp).."] "..s)
+  end
+
+  function XmlEscape(s)
+    s = string.gsub(s, "&", "&amp;")
+    s = string.gsub(s, "<", "&lt;")
+    s = string.gsub(s, ">", "&gt;")
+    s = string.gsub(s, '"', "&quot;")
+    return s
+  end
+
+  -- undo XML escaping (Sonos nests escaped XML inside XML, so run a few passes)
+  function xmlparser(xmlstring)
+    local FindValues = {"&lt;", "&gt;", "&quot;", "&amp;", "%%3a", "%%2f", "%%25", "&apos;"}
+    local correctvalues = {"<", ">", '"', "&", ":", "/", "%%", "'"}
+    for k,v in pairs(FindValues) do
+      xmlstring = string.gsub(xmlstring, v, correctvalues[k])
+      xmlstring = string.gsub(xmlstring, v, correctvalues[k])
+      xmlstring = string.gsub(xmlstring, v, correctvalues[k])
+    end
+    return xmlstring
+  end
+
+  function RemoveAmp(data)
+    if data == nil then return "" end
+    data = string.gsub(data, "amp;", "")
+    return data
+  end
+
+  function ToSeconds(s)
+    if s == nil then return nil end
+    local h, m, sec = string.match(s, "(%d+):(%d+):(%d+)")
+    if h == nil then return nil end
+    return tonumber(h) * 3600 + tonumber(m) * 60 + tonumber(sec)
+  end
+
+  function ToClock(sec)
+    sec = math.floor((sec or 0) + 0.5)
+    local h = math.floor(sec / 3600)
+    local m = math.floor((sec % 3600) / 60)
+    return string.format("%d:%02d:%02d", h, m, sec % 60)
+  end
+
+  function ParseOnOff(arg, current)
+    local a = string.lower(arg or "")
+    if a == "on" or a == "1" or a == "true" then return true end
+    if a == "off" or a == "0" or a == "false" then return false end
+    return not current
+  end
+
+  function UpdateStatus(code, e)
+    if e ~= nil then
+      Controls.Status.Value = 2
+      Controls.Status.String = "Error: "..tostring(e)
+    elseif code == 200 then
+      if Warning ~= "" then
+        Controls.Status.Value = 1
+        Controls.Status.String = Warning
+      else
+        Controls.Status.Value = 0
+        Controls.Status.String = "OK"
+      end
+    else
+      Controls.Status.Value = 1
+      Controls.Status.String = "HTTP error "..tostring(code)
+    end
+  end
+
+  function SetFault(msg)
+    Controls.Status.Value = 2
+    Controls.Status.String = msg
+    print("[Sonos "..PlayerProp.."] "..msg)
+  end
+
+  ---------------------------------------------------------------- SOAP
+  Services = {
+    AVTransport       = {path = "/MediaRenderer/AVTransport/Control",      urn = "urn:schemas-upnp-org:service:AVTransport:1"},
+    RenderingControl  = {path = "/MediaRenderer/RenderingControl/Control", urn = "urn:schemas-upnp-org:service:RenderingControl:1"},
+    ContentDirectory  = {path = "/MediaServer/ContentDirectory/Control",   urn = "urn:schemas-upnp-org:service:ContentDirectory:1"},
+    Queue             = {path = "/MediaRenderer/Queue/Control",            urn = "urn:schemas-sonos-com:service:Queue:1"},
+    ZoneGroupTopology = {path = "/ZoneGroupTopology/Control",              urn = "urn:schemas-upnp-org:service:ZoneGroupTopology:1"},
+  }
+
+  function GenericDone(tbl, code, d, e)
+    UpdateStatus(code, e)
+  end
+
+  function SOAP(ip, service, action, args, handler)
+    if ip == nil or ip == "" then return end
+    local s = Services[service]
+    HttpClient.Upload {
+      Url = "http://"..ip..":1400"..s.path,
+      Method = "POST",
+      Data = '<?xml version="1.0" encoding="utf-8"?>'..
+             '<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">'..
+             '<s:Body><u:'..action..' xmlns:u="'..s.urn..'">'..(args or "")..'</u:'..action..'></s:Body></s:Envelope>',
+      Headers = {
+        ["Content-Type"] = 'text/xml; charset="utf-8"',
+        SOAPACTION = s.urn.."#"..action,
+      },
+      EventHandler = handler or GenericDone
+    }
+  end
+
+  INSTANCE = "<InstanceID>0</InstanceID>"
+
+  ---------------------------------------------------------------- UI helpers
+  Interactive = {"Play","Previous","Next","Shuffle","Repeat","Volume","Mute","Group_Volume","Group_Mute","Group_With","Favorite","Time","Play_URI","Snapshot","Restore"}
+
+  function EnableControls(state)
+    for _,n in ipairs(Interactive) do Controls[n].IsDisabled = not state end
+  end
+
+  function ClearNowPlaying()
+    Controls.State.String = ""
+    Controls.Track.String = ""
+    Controls.Artist.String = ""
+    Controls.Album.String = ""
+    Controls.Elapsed.String = ""
+    Controls.Duration.String = ""
+    Controls.Time.Value = 0
+    Controls.Play.Boolean = false
+    Controls.Repeat_Mode.String = ""
+    Controls.Coordinator.String = ""
+    ArtURI, ArtData = nil, nil
+    Controls.Art.Legend = rapidjson.encode({DrawChrome = false})
+  end
+
+  ---------------------------------------------------------------- discovery
+  -- The player is always resolved through ZoneGroupTopology (any Sonos on the LAN knows every room).
+  -- Given an IP we ask that player directly; given a room name we scan the subnet until one Sonos
+  -- answers and ask it.
+  function StartDiscovery()
+    Poll:Stop()
+    Ready = false
+    Me, Coord, Topology, GroupMembers = {}, {}, {}, {}
+    Vol, MuteState = {}, {}
+    Found, TopoRequested = {}, false
+    Snapshot_Data = nil
+    Warning = ""
+    Controls.Online.Boolean = false
+    Controls.Room.String = PlayerProp
+    Controls.IP.String = ""
+    Controls.Group_With.Choices = {}
+    Controls.Favorite.Choices = {}
+    EnableControls(false)
+    ClearNowPlaying()
+
+    if PlayerProp == "" then
+      SetFault("Set the 'Player' property to a room name or IP")
+      return
+    end
+
+    if IsIPv4(PlayerProp) then
+      Controls.Status.String = "Connecting to "..PlayerProp
+      SOAP(PlayerProp, "ZoneGroupTopology", "GetZoneGroupState", "", TopologyDone)
+      Timer.CallAfter(CheckResolved, DISCOVERY_WAIT)
+      return
+    end
+
+    local base = Controls.Discover_IP.String
+    if not string.find(base or "", "%d+%.%d+%.%d+%.%d+") then
+      base = nil
+      for k, item in ipairs(Network.Interfaces()) do
+        if k == 1 then base = item.Address end
+      end
+    end
+    local subnet = string.match(base or "", "(%d+%.%d+%.%d+%.)")
+    if subnet == nil then
+      SetFault("No IPv4 address to scan from")
+      return
+    end
+    Controls.Status.String = "Scanning "..subnet.."0/24 for '"..PlayerProp.."'"
+    for i = 0, 255 do
+      HttpClient.Download { Url = "http://"..subnet..i..":1400/xml/device_description.xml", Timeout = 30, EventHandler = ScanDone }
+    end
+    Timer.CallAfter(CheckResolved, DISCOVERY_WAIT + 4)
+  end
+
+  function ScanDone(tbl, code, d, e)
+    if Ready or d == nil then return end
+    if not string.find(d, "<manufacturer>Sonos, Inc.</manufacturer>") then return end
+    local name = string.match(d, "<roomName>(.-)</roomName>")
+    local ip = string.match(tbl.Url, "%d+%.%d+%.%d+%.%d+")
+    if name ~= nil and ip ~= nil then Found[name] = ip end
+    -- the first Sonos that answers tells us about all the others
+    if not TopoRequested and ip ~= nil then
+      TopoRequested = true
+      SOAP(ip, "ZoneGroupTopology", "GetZoneGroupState", "", TopologyDone)
+    end
+  end
+
+  function CheckResolved()
+    if Ready then return end
+    if IsIPv4(PlayerProp) then
+      SetFault("No Sonos player answered at "..PlayerProp)
+    elseif next(Found) == nil then
+      SetFault("No Sonos players found on the subnet")
+    else
+      local names = {}
+      for n in pairs(Found) do table.insert(names, n) end
+      table.sort(names)
+      SetFault("Room '"..PlayerProp.."' not found. Found: "..table.concat(names, ", "))
+    end
+  end
+
+  function TopologyDone(tbl, code, d, e)
+    if d == nil then
+      if not Ready then UpdateStatus(code, e) end
+      return
+    end
+    local x = xmlparser(d)
+    local topo = {}
+    for coord, gid, body in string.gmatch(x, '<ZoneGroup Coordinator="(.-)" ID="(.-)">(.-)</ZoneGroup>') do
+      for attrs in string.gmatch(body, "<ZoneGroupMember ([^>]*)>") do
+        local uuid = string.match(attrs, 'UUID="(.-)"')
+        local loc  = string.match(attrs, 'Location="(.-)"') or ""
+        local name = string.match(attrs, 'ZoneName="(.-)"') or ""
+        local inv  = string.match(attrs, 'Invisible="(.-)"')
+        if uuid ~= nil and inv ~= "1" then
+          table.insert(topo, {uuid = uuid, name = name, ip = string.match(loc, "%d+%.%d+%.%d+%.%d+"), coord = coord})
+        end
+      end
+    end
+    if #topo == 0 then return end
+    Topology = topo
+    if not Ready then ResolveMe() end
+    if Ready then UpdateGroupFromTopology() end
+  end
+
+  function ResolveMe()
+    local byIP = IsIPv4(PlayerProp)
+    local want = string.lower(PlayerProp)
+    for _,t in ipairs(Topology) do
+      if (byIP and t.ip == PlayerProp) or (not byIP and string.lower(t.name) == want) then
+        Me = {IP = t.ip, Name = t.name, uuid = t.uuid}
+        OnReady()
+        return
+      end
+    end
+  end
+
+  function OnReady()
+    Ready = true
+    Warning = ""
+    Controls.Online.Boolean = true
+    Controls.Room.String = Me.Name
+    Controls.IP.String = Me.Name.."  @  "..Me.IP
+    UpdateStatus(200, nil)
+    EnableControls(true)
+    print("[Sonos "..Me.Name.."] online at "..Me.IP.." ("..Me.uuid..")")
+    TickCount = 0
+    Poll:Start(PollRate)
+    GetFavorites()
+  end
+
+  function RefreshTopology()
+    SOAP(Me.IP, "ZoneGroupTopology", "GetZoneGroupState", "", TopologyDone)
+  end
+
+  function FindRoom(name)
+    local a = string.lower(name or "")
+    for _,t in ipairs(Topology) do
+      if string.lower(t.name) == a then return t end
+    end
+    return nil
+  end
+
+  function UpdateGroupFromTopology()
+    local mine
+    for _,t in ipairs(Topology) do
+      if t.uuid == Me.uuid then mine = t end
+    end
+    if mine == nil then return end
+    Me.IP = mine.ip or Me.IP
+    Me.Name = mine.name
+
+    local coordEntry = mine
+    for _,t in ipairs(Topology) do
+      if t.uuid == mine.coord then coordEntry = t end
+    end
+    local coordChanged = (Coord.uuid ~= coordEntry.uuid)
+    Coord = {IP = coordEntry.ip, Name = coordEntry.name, uuid = coordEntry.uuid}
+
+    GroupMembers = {}
+    local memberNames = {}
+    for _,t in ipairs(Topology) do
+      if t.coord == mine.coord then
+        table.insert(GroupMembers, t)
+        if t.uuid ~= Coord.uuid then table.insert(memberNames, t.name) end
+      end
+    end
+    table.sort(memberNames)
+
+    -- "Group with" choices: every other room + standalone
+    local others = {}
+    for _,t in ipairs(Topology) do
+      if t.uuid ~= Me.uuid then table.insert(others, t.name) end
+    end
+    table.sort(others)
+    table.insert(others, STANDALONE)
+    Controls.Group_With.Choices = others
+
+    if Coord.uuid ~= Me.uuid then
+      Controls.Group_With.String = Coord.Name
+      Controls.Coordinator.String = "In group with "..Coord.Name
+    else
+      Controls.Group_With.String = ""
+      if #memberNames > 0 then
+        Controls.Coordinator.String = "Group: "..Me.Name.." + "..table.concat(memberNames, ", ")
+      else
+        Controls.Coordinator.String = "Standalone"
+      end
+    end
+
+    if coordChanged then PollTransport(); PollSettings() end
+    UpdateGroupVolume()
+  end
+
+  ---------------------------------------------------------------- polling
+  function PollTransport()
+    SOAP(Coord.IP, "AVTransport", "GetTransportInfo", INSTANCE, TransportInfoDone)
+    SOAP(Coord.IP, "AVTransport", "GetPositionInfo", INSTANCE, PositionInfoDone)
+  end
+
+  function PollSettings()
+    SOAP(Coord.IP, "AVTransport", "GetTransportSettings", INSTANCE, SettingsDone)
+  end
+
+  function PollVolume(ip)
+    SOAP(ip, "RenderingControl", "GetVolume", INSTANCE.."<Channel>Master</Channel>", VolumeDone)
+    SOAP(ip, "RenderingControl", "GetMute",   INSTANCE.."<Channel>Master</Channel>", MuteDone)
+  end
+
+  Poll.EventHandler = function()
+    if not Ready then return end
+    if SkipPolls > 0 then SkipPolls = SkipPolls - 1 return end
+    TickCount = TickCount + 1
+    local every5  = math.max(1, math.floor(5 / PollRate))
+    local every60 = math.max(1, math.floor(60 / PollRate))
+
+    PollTransport()
+    PollVolume(Me.IP)
+
+    if TickCount % every5 == 0 then
+      PollSettings()
+      RefreshTopology()
+      for _,t in ipairs(GroupMembers) do
+        if t.ip ~= Me.IP then PollVolume(t.ip) end
+      end
+    end
+    if TickCount % every60 == 0 then
+      GetFavorites()
+      TickCount = 0
+    end
+  end
+
+  function TransportInfoDone(tbl, code, d, e)
+    UpdateStatus(code, e)
+    if d == nil then return end
+    local st = string.match(d, "<CurrentTransportState>(.-)</CurrentTransportState>")
+    if st == nil then return end
+    Controls.State.String = st
+    Controls.Play.Boolean = (st == "PLAYING" or st == "TRANSITIONING")
+  end
+
+  function PositionInfoDone(tbl, code, d, e)
+    UpdateStatus(code, e)
+    if d == nil then return end
+    local uri  = string.match(d, "<TrackURI>(.-)</TrackURI>") or ""
+    local meta = xmlparser(string.match(d, "<TrackMetaData>(.-)</TrackMetaData>") or "")
+    local title  = string.match(meta, "<dc:title>(.-)</dc:title>") or ""
+    local stream = string.match(meta, "<r:streamContent>(.-)</r:streamContent>") or ""
+    local artist = string.match(meta, "<dc:creator>(.-)</dc:creator>") or ""
+    local album  = string.match(meta, "<upnp:album>(.-)</upnp:album>") or ""
+    local art    = string.match(meta, "<upnp:albumArtURI>(.-)</upnp:albumArtURI>")
+
+    if string.find(uri, "x-sonos-htastream", 1, true) then
+      title, artist, album = "TV", "", ""
+    elseif string.find(uri, "x-rincon-stream", 1, true) then
+      title, artist, album = "Line-In", "", ""
+    elseif stream ~= "" and stream ~= " " then
+      -- radio: station name from dc:title, current programme/song from streamContent
+      artist, title = title, stream
+    elseif title == "" and uri ~= "" then
+      title = "Stream"
+    end
+    Controls.Track.String = title
+    Controls.Artist.String = artist
+    Controls.Album.String = album
+
+    Pos = ToSeconds(string.match(d, "<RelTime>(.-)</RelTime>"))
+    Dur = ToSeconds(string.match(d, "<TrackDuration>(.-)</TrackDuration>"))
+    if Dur ~= nil and Dur > 0 then
+      Controls.Elapsed.String = ToClock(Pos or 0)
+      Controls.Duration.String = ToClock(Dur)
+      if SeekPending == nil then Controls.Time.Value = math.min(100, (Pos or 0) / Dur * 100) end
+    else
+      Controls.Elapsed.String = ""
+      Controls.Duration.String = ""
+      if SeekPending == nil then Controls.Time.Value = 0 end
+    end
+
+    FetchArt(art)
+  end
+
+  function SettingsDone(tbl, code, d, e)
+    UpdateStatus(code, e)
+    if d == nil then return end
+    local pm = string.match(d, "<PlayMode>(.-)</PlayMode>")
+    local fb = Play_Modes_FB[pm or ""]
+    if fb == nil then return end
+    PlayMode = pm
+    Controls.Shuffle.Boolean = fb[1]
+    Controls.Repeat.Boolean = fb[2]
+    Controls.Repeat_Mode.String = Repeat_Modes_Indicator[fb[3]]
+  end
+
+  function VolumeDone(tbl, code, d, e)
+    UpdateStatus(code, e)
+    if d == nil then return end
+    local ip = string.match(tbl.Url, "%d+%.%d+%.%d+%.%d+")
+    local v = tonumber(string.match(d, "<CurrentVolume>(%d+)</CurrentVolume>"))
+    if ip == nil or v == nil then return end
+    Vol[ip] = v
+    if ip == Me.IP then Controls.Volume.Value = v end
+    UpdateGroupVolume()
+  end
+
+  function MuteDone(tbl, code, d, e)
+    UpdateStatus(code, e)
+    if d == nil then return end
+    local ip = string.match(tbl.Url, "%d+%.%d+%.%d+%.%d+")
+    local m = string.match(d, "<CurrentMute>(%d)</CurrentMute>")
+    if ip == nil or m == nil then return end
+    MuteState[ip] = (m == "1")
+    if ip == Me.IP then
+      Controls.Mute.Boolean = MuteState[ip]
+      Controls.Mute.Style = Mute_Icons[Bool2Num[MuteState[ip]]]
+    end
+    UpdateGroupVolume()
+  end
+
+  function UpdateGroupVolume()
+    local sum, n, allMuted = 0, 0, true
+    for _,t in ipairs(GroupMembers) do
+      if t.ip ~= nil and Vol[t.ip] ~= nil then
+        sum = sum + Vol[t.ip]
+        n = n + 1
+        if not MuteState[t.ip] then allMuted = false end
+      end
+    end
+    if n > 0 then
+      Controls.Group_Volume.Value = sum / n
+      Controls.Group_Mute.Boolean = allMuted
+      Controls.Group_Mute.Style = Mute_Icons[Bool2Num[allMuted]]
+    end
+  end
+
+  ---------------------------------------------------------------- album art
+  function FetchArt(uri)
+    if not ShowArt then return end
+    if uri == nil or uri == "" then
+      if ArtURI ~= nil then
+        ArtURI, ArtData = nil, nil
+        Controls.Art.Legend = rapidjson.encode({DrawChrome = false})
+      end
+      return
+    end
+    if not string.find(uri, "^http") then uri = "http://"..Coord.IP..":1400"..uri end
+    if ArtURI == uri then return end
+    ArtURI = uri
+    HttpClient.Download { Url = uri, EventHandler = function(tbl, code, d, e)
+      if code == 200 and d ~= nil and ArtURI == uri then
+        if #d > ART_MAX_BYTES then
+          print("[Sonos "..Me.Name.."] album art skipped, "..math.floor(#d / 1024).." kB > limit")
+          ArtData = nil
+        else
+          ArtData = Crypto.Base64Encode(d)
+        end
+        Controls.Art.Legend = rapidjson.encode({DrawChrome = false, IconData = ArtData})
+      end
+    end }
+  end
+
+  ---------------------------------------------------------------- favorites (Sonos favorites, FV:2)
+  function GetFavorites()
+    SOAP(Me.IP, "ContentDirectory", "Browse",
+      "<ObjectID>FV:2</ObjectID><BrowseFlag>BrowseDirectChildren</BrowseFlag><Filter>dc:title</Filter>"..
+      "<StartingIndex>0</StartingIndex><RequestedCount>50</RequestedCount><SortCriteria />", FavoritesDone)
+  end
+
+  function FavoritesDone(tbl, code, d, e)
+    UpdateStatus(code, e)
+    if d == nil then return end
+    local Names, xRincon, M1, M2, M3, M4 = {}, {}, {}, {}, {}, {}
+    local x = xmlparser(d)
+    for title in string.gmatch(x, "<dc:title>(.-)</dc:title>") do table.insert(Names, title) end
+    for r in string.gmatch(d, ":%*:%*:%*%&quot;%&gt;(.-)&lt;") do table.insert(xRincon, r) end
+    for m in string.gmatch(d, "resMD&gt;&amp;lt;(DIDL%-Lite.-)&amp;lt;/upnp:class&amp;gt;&amp;lt") do table.insert(M1, m) end
+    for m in string.gmatch(d, "upnp:albumArtURI.-/upnp:albumArtURI&gt;&lt;") do table.insert(M2, m) end
+    for m in string.gmatch(x, "<r:description>(.-)</r:description>") do table.insert(M3, m) end
+    for m in string.gmatch(d, "desc id=.-DIDL%-Lite") do table.insert(M4, m) end
+    EURIsAndMetaData = {}
+    for i = 1, #xRincon do
+      EURIsAndMetaData[i] = [[&lt;URIs&gt;&lt;URI uri=&quot;]]..xRincon[i]..[[&quot;&gt;&lt;]]..RemoveAmp(M1[i])..[[.sonos-favorite&lt;/upnp:class&gt;&lt;]]..RemoveAmp(M2[i])..[[r:description&gt;]]..RemoveAmp(M3[i])..[[&lt;/r:description&gt;&lt;]]..RemoveAmp(M4[i])..[[&gt;&lt;/URI&gt;&lt;/URIs&gt;]]
+    end
+    Controls.Favorite.Choices = Names
+  end
+
+  function PlayFavoriteIndex(i)
+    if Coord.IP == nil or EURIsAndMetaData[i] == nil then return false end
+    SkipPolls = 2
+    local ip, uuid = Coord.IP, Coord.uuid
+    -- 1. make the coordinator play its own queue, 2. replace the queue with the favorite, 3. play
+    SOAP(ip, "AVTransport", "SetAVTransportURI", INSTANCE.."<CurrentURI>x-rincon-queue:"..uuid.."#0</CurrentURI><CurrentURIMetaData></CurrentURIMetaData>")
+    Timer.CallAfter(function()
+      SOAP(ip, "Queue", "ReplaceAllTracks",
+        "<QueueID>0</QueueID><UpdateID>0</UpdateID><ContainerURI></ContainerURI><ContainerMetaData></ContainerMetaData>"..
+        "<CurrentTrackIndex>0</CurrentTrackIndex><NewCurrentTrackIndices>1</NewCurrentTrackIndices><NumberOfURIs>1</NumberOfURIs>"..
+        "<EnqueuedURIsAndMetaData>"..EURIsAndMetaData[i].."</EnqueuedURIsAndMetaData>")
+    end, RESTORE_STEP)
+    Timer.CallAfter(function() SOAP(ip, "AVTransport", "Play", INSTANCE.."<Speed>1</Speed>") end, 3)
+    return true
+  end
+
+  function PlayFavorite(arg)
+    local choices = Controls.Favorite.Choices
+    local n = tonumber(arg)
+    if n ~= nil and choices[n] ~= nil then return PlayFavoriteIndex(n) end
+    local a = string.lower(arg or "")
+    for i,m in ipairs(choices) do
+      if string.lower(m) == a then return PlayFavoriteIndex(i) end
+    end
+    return false
+  end
+
+  ---------------------------------------------------------------- actions
+  function Transport(action)
+    if Coord.IP == nil then return false end
+    SkipPolls = 1
+    if action == "Play" then
+      SOAP(Coord.IP, "AVTransport", "Play", INSTANCE.."<Speed>1</Speed>")
+    else
+      SOAP(Coord.IP, "AVTransport", action, INSTANCE)
+    end
+    return true
+  end
+
+  function SetVolume(n)
+    if Me.IP == nil then return false end
+    n = ClampVolume(n)
+    SkipPolls = 1
+    Controls.Volume.Value = n
+    Vol[Me.IP] = n
+    SOAP(Me.IP, "RenderingControl", "SetVolume", INSTANCE.."<Channel>Master</Channel><DesiredVolume>"..n.."</DesiredVolume>")
+    return true
+  end
+
+  function SetMute(b)
+    if Me.IP == nil then return false end
+    SkipPolls = 1
+    Controls.Mute.Boolean = b
+    Controls.Mute.Style = Mute_Icons[Bool2Num[b]]
+    MuteState[Me.IP] = b
+    SOAP(Me.IP, "RenderingControl", "SetMute", INSTANCE.."<Channel>Master</Channel><DesiredMute>"..Bool2Num[b].."</DesiredMute>")
+    return true
+  end
+
+  function SetGroupVolume(n)
+    if #GroupMembers == 0 then return SetVolume(n) end
+    n = ClampVolume(n)
+    SkipPolls = 2
+    Controls.Group_Volume.Value = n
+    for _,t in ipairs(GroupMembers) do
+      if t.ip ~= nil then
+        Vol[t.ip] = n
+        SOAP(t.ip, "RenderingControl", "SetVolume", INSTANCE.."<Channel>Master</Channel><DesiredVolume>"..n.."</DesiredVolume>")
+      end
+    end
+    Controls.Volume.Value = n
+    return true
+  end
+
+  function SetGroupMute(b)
+    if #GroupMembers == 0 then return SetMute(b) end
+    SkipPolls = 2
+    Controls.Group_Mute.Boolean = b
+    Controls.Group_Mute.Style = Mute_Icons[Bool2Num[b]]
+    for _,t in ipairs(GroupMembers) do
+      if t.ip ~= nil then
+        MuteState[t.ip] = b
+        SOAP(t.ip, "RenderingControl", "SetMute", INSTANCE.."<Channel>Master</Channel><DesiredMute>"..Bool2Num[b].."</DesiredMute>")
+      end
+    end
+    Controls.Mute.Boolean = b
+    Controls.Mute.Style = Mute_Icons[Bool2Num[b]]
+    return true
+  end
+
+  function SetPlayMode(shuffle, ridx)
+    if Coord.IP == nil then return false end
+    local mode = Play_Modes[shuffle and "Shuffle_Repeat" or "Repeat"][ridx]
+    SkipPolls = 2
+    PlayMode = mode
+    Controls.Shuffle.Boolean = shuffle
+    Controls.Repeat.Boolean = (ridx > 1)
+    Controls.Repeat_Mode.String = Repeat_Modes_Indicator[ridx]
+    SOAP(Coord.IP, "AVTransport", "SetPlayMode", INSTANCE.."<NewPlayMode>"..mode.."</NewPlayMode>")
+    return true
+  end
+
+  function CurrentMode()
+    local fb = Play_Modes_FB[PlayMode or ""] or {false, false, 1}
+    return fb[1], fb[3]
+  end
+
+  function SeekPercent(pct)
+    if Coord.IP == nil or Dur == nil or Dur <= 0 then return false end
+    local target = Dur * pct / 100
+    Pos = target
+    SkipPolls = 1
+    SOAP(Coord.IP, "AVTransport", "Seek", INSTANCE.."<Unit>REL_TIME</Unit><Target>"..ToClock(target).."</Target>")
+    return true
+  end
+
+  function JoinGroup(roomName)
+    local t = FindRoom(roomName)
+    if t == nil or Me.IP == nil then return false end
+    if t.uuid == Me.uuid then return false end
+    -- join the coordinator of that room's group
+    local target = t.coord or t.uuid
+    SOAP(Me.IP, "AVTransport", "SetAVTransportURI", INSTANCE.."<CurrentURI>x-rincon:"..target.."</CurrentURI><CurrentURIMetaData></CurrentURIMetaData>")
+    Timer.CallAfter(RefreshTopology, 2)
+    return true
+  end
+
+  function LeaveGroup()
+    if Me.IP == nil then return false end
+    SOAP(Me.IP, "AVTransport", "BecomeCoordinatorOfStandaloneGroup", INSTANCE)
+    Timer.CallAfter(RefreshTopology, 2)
+    return true
+  end
+
+  function PlayURI(uri)
+    if Coord.IP == nil then return false end
+    uri = string.match(uri or "", "^%s*(.-)%s*$")
+    if uri == "" then return false end
+    SkipPolls = 2
+    local ip = Coord.IP
+    SOAP(ip, "AVTransport", "SetAVTransportURI", INSTANCE.."<CurrentURI>"..XmlEscape(uri).."</CurrentURI><CurrentURIMetaData></CurrentURIMetaData>")
+    Timer.CallAfter(function() SOAP(ip, "AVTransport", "Play", INSTANCE.."<Speed>1</Speed>") end, RESTORE_STEP)
+    return true
+  end
+
+  ---------------------------------------------------------------- snapshot / restore
+  function TakeSnapshot()
+    if Coord.IP == nil then SetResult("Snapshot: not online") return false end
+    SOAP(Coord.IP, "AVTransport", "GetMediaInfo", INSTANCE, SnapshotDone)
+    return true
+  end
+
+  function SnapshotDone(tbl, code, d, e)
+    UpdateStatus(code, e)
+    if d == nil or code ~= 200 then SetResult("Snapshot failed") return end
+    local snap = {
+      IP = Coord.IP, Name = Coord.Name,
+      URI  = string.match(d, "<CurrentURI>(.-)</CurrentURI>") or "",
+      Meta = string.match(d, "<CurrentURIMetaData>(.-)</CurrentURIMetaData>") or "",
+      Pos = Pos, Dur = Dur,
+      Playing = Controls.Play.Boolean,
+      Volumes = {}, Mutes = {}
+    }
+    for _,t in ipairs(GroupMembers) do
+      if t.ip ~= nil then snap.Volumes[t.ip] = Vol[t.ip]; snap.Mutes[t.ip] = MuteState[t.ip] end
+    end
+    if Me.IP ~= nil then snap.Volumes[Me.IP] = Vol[Me.IP]; snap.Mutes[Me.IP] = MuteState[Me.IP] end
+    Snapshot_Data = snap
+    SetResult("Snapshot taken ("..tostring(snap.Name)..")")
+  end
+
+  function RestoreSnapshot()
+    local s = Snapshot_Data
+    if s == nil then SetResult("Restore: no snapshot") return false end
+    SkipPolls = 4
+    local isQueue = (string.find(s.URI, "x-rincon-queue:", 1, true) == 1)
+    SOAP(s.IP, "AVTransport", "SetAVTransportURI", INSTANCE.."<CurrentURI>"..s.URI.."</CurrentURI><CurrentURIMetaData>"..s.Meta.."</CurrentURIMetaData>")
+    Timer.CallAfter(function()
+      if isQueue and s.Pos ~= nil then
+        SOAP(s.IP, "AVTransport", "Seek", INSTANCE.."<Unit>REL_TIME</Unit><Target>"..ToClock(s.Pos).."</Target>")
+      end
+      for ip,v in pairs(s.Volumes) do
+        if v ~= nil then SOAP(ip, "RenderingControl", "SetVolume", INSTANCE.."<Channel>Master</Channel><DesiredVolume>"..v.."</DesiredVolume>") end
+      end
+      for ip,m in pairs(s.Mutes) do
+        if m ~= nil then SOAP(ip, "RenderingControl", "SetMute", INSTANCE.."<Channel>Master</Channel><DesiredMute>"..Bool2Num[m].."</DesiredMute>") end
+      end
+    end, RESTORE_STEP * 2)
+    Timer.CallAfter(function()
+      if s.Playing then
+        SOAP(s.IP, "AVTransport", "Play", INSTANCE.."<Speed>1</Speed>")
+      elseif isQueue then
+        SOAP(s.IP, "AVTransport", "Pause", INSTANCE)
+      else
+        SOAP(s.IP, "AVTransport", "Stop", INSTANCE)
+      end
+      SetResult("Snapshot restored ("..tostring(s.Name)..")")
+    end, RESTORE_STEP * 3)
+    return true
+  end
+
+  ---------------------------------------------------------------- command pin
+  function RunCommand(s)
+    local cmd, arg = string.match(s, "^%s*(%S+)%s*(.-)%s*$")
+    if cmd == nil then return end
+    cmd = string.lower(cmd)
+    local ok = true
+
+    if cmd == "discover" then
+      StartDiscovery()
+    elseif not Ready then
+      SetResult("Not online")
+      return
+    elseif cmd == "play" then ok = Transport("Play")
+    elseif cmd == "pause" then ok = Transport("Pause")
+    elseif cmd == "stop" then ok = Transport("Stop")
+    elseif cmd == "next" then ok = Transport("Next")
+    elseif cmd == "prev" or cmd == "previous" then ok = Transport("Previous")
+    elseif cmd == "vol" or cmd == "volume" then
+      if tonumber(arg) == nil then SetResult("vol needs a number 0-100") return end
+      ok = SetVolume(tonumber(arg))
+    elseif cmd == "groupvol" or cmd == "groupvolume" then
+      if tonumber(arg) == nil then SetResult("groupvol needs a number 0-100") return end
+      ok = SetGroupVolume(tonumber(arg))
+    elseif cmd == "mute" then ok = SetMute(ParseOnOff(arg, Controls.Mute.Boolean))
+    elseif cmd == "groupmute" then ok = SetGroupMute(ParseOnOff(arg, Controls.Group_Mute.Boolean))
+    elseif cmd == "shuffle" then
+      local sh, ridx = CurrentMode()
+      ok = SetPlayMode(ParseOnOff(arg, sh), ridx)
+    elseif cmd == "repeat" then
+      local sh, ridx = CurrentMode()
+      local a = string.lower(arg or "")
+      if a == "off" then ridx = 1 elseif a == "one" then ridx = 2 elseif a == "all" then ridx = 3
+      else ridx = ridx + 1; if ridx > 3 then ridx = 1 end end
+      ok = SetPlayMode(sh, ridx)
+    elseif cmd == "group" or cmd == "join" then
+      ok = JoinGroup(arg)
+      if not ok then SetResult("Unknown room: "..arg) return end
+    elseif cmd == "standalone" or cmd == "ungroup" or cmd == "leave" then ok = LeaveGroup()
+    elseif cmd == "favorite" or cmd == "favourite" or cmd == "playlist" then
+      ok = PlayFavorite(arg)
+      if not ok then SetResult("Unknown favorite: "..arg) return end
+    elseif cmd == "uri" then ok = PlayURI(arg)
+    elseif cmd == "snapshot" then ok = TakeSnapshot()
+    elseif cmd == "restore" then ok = RestoreSnapshot()
+    else
+      SetResult("Unknown command: "..cmd)
+      return
+    end
+    if ok then SetResult("OK: "..s) else SetResult("Failed: "..s) end
+  end
+
+  ---------------------------------------------------------------- control handlers
+  Controls.Play.EventHandler = function(v)
+    if v.Boolean then Transport("Play") else Transport("Pause") end
+  end
+  Controls.Next.EventHandler = function() Transport("Next") end
+  Controls.Previous.EventHandler = function()
+    if Pos ~= nil and Pos > 10 then SeekPercent(0) else Transport("Previous") end
+  end
+
+  Controls.Shuffle.EventHandler = function(v)
+    local _, ridx = CurrentMode()
+    SetPlayMode(v.Boolean, ridx)
+  end
+  Controls.Repeat.EventHandler = function(v)
+    local sh, ridx = CurrentMode()
+    ridx = ridx + 1
+    if ridx > 3 then ridx = 1 end
+    SetPlayMode(sh, ridx)
+  end
+
+  Controls.Volume.EventHandler = function(v) SetVolume(v.Value) end
+  Controls.Mute.EventHandler = function(v) SetMute(v.Boolean) end
+  Controls.Group_Volume.EventHandler = function(v) SetGroupVolume(v.Value) end
+  Controls.Group_Mute.EventHandler = function(v) SetGroupMute(v.Boolean) end
+
+  Controls.Time.EventHandler = function(v)
+    -- debounced: only the last position is sent, 0.5 s after the last move
+    local schedule = (SeekPending == nil)
+    SeekPending = v.Value
+    if schedule then
+      Timer.CallAfter(function()
+        local pct = SeekPending
+        SeekPending = nil
+        SeekPercent(pct)
+      end, 0.5)
+    end
+  end
+
+  Controls.Group_With.EventHandler = function(v)
+    local s = v.String
+    if s == STANDALONE then
+      LeaveGroup()
+    elseif s ~= "" then
+      if not JoinGroup(s) then SetResult("Unknown room: "..s) end
+    end
+  end
+  Controls.Standalone.EventHandler = function() LeaveGroup() end
+
+  Controls.Favorite.EventHandler = function(v)
+    for i,m in ipairs(Controls.Favorite.Choices) do
+      if v.String == m then PlayFavoriteIndex(i) end
+    end
+  end
+
+  Controls.Play_URI.EventHandler = function(v)
+    if v.String ~= nil and v.String ~= "" then
+      if PlayURI(v.String) then SetResult("Playing URI") end
+    end
+  end
+
+  Controls.Command.EventHandler = function(c)
+    local s = c.String
+    if s == nil or s == "" then return end
+    c.String = "" -- cleared so the same command can be sent again from a wired Text control
+    RunCommand(s)
+  end
+
+  Controls.Snapshot.EventHandler = function() TakeSnapshot() end
+  Controls.Restore.EventHandler = function() RestoreSnapshot() end
+  Controls.Discover.EventHandler = function() StartDiscovery() end
+
+  Controls.Max_Volume.EventHandler = function(v)
+    local mx = math.floor(v.Value + 0.5)
+    if mx > 0 and Controls.Volume.Value > mx then SetVolume(mx) end
+  end
+
+  ---------------------------------------------------------------- go
+  Controls.Command_Result.String = ""
+  StartDiscovery()
+
+end -- runtime
